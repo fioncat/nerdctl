@@ -375,7 +375,7 @@ func createDiff(ctx context.Context, name string, sn snapshots.Snapshotter, cs c
 	}
 
 	return ocispec.Descriptor{
-		MediaType: images.MediaTypeDockerSchema2LayerGzip,
+		MediaType: images.MediaTypeDockerSchema2Layer,
 		Digest:    newDesc.Digest,
 		Size:      info.Size,
 	}, diffID, nil
