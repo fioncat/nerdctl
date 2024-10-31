@@ -354,7 +354,7 @@ func writeContentsForImage(ctx context.Context, snName string, baseImg container
 
 // createDiff creates a layer diff into containerd's content store.
 func createDiff(ctx context.Context, name string, sn snapshots.Snapshotter, cs content.Store, comparer diff.Comparer) (ocispec.Descriptor, digest.Digest, error) {
-	newDesc, err := rootfs.CreateDiff(ctx, name, sn, comparer)
+	newDesc, err := rootfs.CreateDiff(ctx, name, sn, comparer, diff.WithMediaType(images.MediaTypeDockerSchema2Layer))
 	if err != nil {
 		return ocispec.Descriptor{}, digest.Digest(""), err
 	}
