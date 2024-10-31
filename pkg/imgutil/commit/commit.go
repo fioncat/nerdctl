@@ -364,21 +364,11 @@ func createDiff(ctx context.Context, name string, sn snapshots.Snapshotter, cs c
 		return ocispec.Descriptor{}, digest.Digest(""), err
 	}
 
-	diffIDStr, ok := info.Labels["containerd.io/uncompressed"]
-	if !ok {
-		return ocispec.Descriptor{}, digest.Digest(""), fmt.Errorf("invalid differ response with no diffID")
-	}
-
-	diffID, err := digest.Parse(diffIDStr)
-	if err != nil {
-		return ocispec.Descriptor{}, digest.Digest(""), err
-	}
-
 	return ocispec.Descriptor{
 		MediaType: images.MediaTypeDockerSchema2Layer,
 		Digest:    newDesc.Digest,
 		Size:      info.Size,
-	}, diffID, nil
+	}, info.Digest, nil
 }
 
 // applyDiffLayer will apply diff layer content created by createDiff into the snapshotter.
