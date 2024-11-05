@@ -49,6 +49,7 @@ import (
 	"github.com/containerd/nerdctl/v2/pkg/cmd/image"
 	"github.com/containerd/nerdctl/v2/pkg/containerutil"
 	imgutil "github.com/containerd/nerdctl/v2/pkg/imgutil"
+	"github.com/containerd/nerdctl/v2/pkg/imgutil/tracklogs"
 	"github.com/containerd/nerdctl/v2/pkg/labels"
 )
 
@@ -70,17 +71,27 @@ var (
 )
 
 func Commit(ctx context.Context, client *containerd.Client, container containerd.Container, opts *Opts, globalOptions types.GlobalCommandOptions) (digest.Digest, error) {
+	track, err := tracklogs.New()
+	if err != nil {
+		return emptyDigest, err
+	}
+	defer track.Close()
+
 	// Get labels
+	track.Begin("Commit: get labels")
 	containerLabels, err := container.Labels(ctx)
 	if err != nil {
 		return emptyDigest, err
 	}
+	track.End()
 
 	// Get datastore
+	track.Begin("Commit: get datastore")
 	dataStore, err := clientutil.DataStore(globalOptions.DataRoot, globalOptions.Address)
 	if err != nil {
 		return emptyDigest, err
 	}
+	track.End()
 
 	// Ensure we do have a stateDir label
 	stateDir := containerLabels[labels.StateDir]
@@ -91,11 +102,13 @@ func Commit(ctx context.Context, client *containerd.Client, container containerd
 		}
 	}
 
+	track.Begin("Commit: lock")
 	lf, err := containerutil.Lock(stateDir)
 	if err != nil {
 		return emptyDigest, err
 	}
 	defer lf.Release()
+	track.End()
 
 	id := container.ID()
 	info, err := container.Info(ctx)
@@ -105,6 +118,7 @@ func Commit(ctx context.Context, client *containerd.Client, container containerd
 
 	// NOTE: Moby uses provided rootfs to run container. It doesn't support
 	// to commit container created by moby.
+	track.Begin("Commit: get image from service")
 	baseImgWithoutPlatform, err := client.ImageService().Get(ctx, info.Image)
 	if err != nil {
 		return emptyDigest, fmt.Errorf("container %q lacks image (wasn't created by nerdctl?): %w", id, err)
@@ -121,18 +135,23 @@ func Commit(ctx context.Context, client *containerd.Client, container containerd
 	log.G(ctx).Debugf("ocispecPlatform=%q", platforms.Format(ocispecPlatform))
 	platformMC := platforms.Only(ocispecPlatform)
 	baseImg := containerd.NewImageWithPlatform(client, baseImgWithoutPlatform, platformMC)
+	track.End()
 
+	track.Begin("Commit: read image config")
 	baseImgConfig, _, err := imgutil.ReadImageConfig(ctx, baseImg)
 	if err != nil {
 		return emptyDigest, err
 	}
+	track.End()
 
 	// Ensure all the layers are here: https://github.com/containerd/nerdctl/issues/3425
+	track.Begin("Commit: ensure all content")
 	err = image.EnsureAllContent(ctx, client, baseImg.Name(), globalOptions)
 	if err != nil {
 		log.G(ctx).Warn("Unable to fetch missing layers before committing. " +
 			"If you try to save or push this image, it might fail. See https://github.com/containerd/nerdctl/issues/3439.")
 	}
+	track.End()
 
 	if opts.Pause {
 		task, err := container.Task(ctx, cio.Load)
@@ -173,25 +192,33 @@ func Commit(ctx context.Context, client *containerd.Client, container containerd
 	}
 	defer done(ctx)
 
+	track.Begin("Commit: create diff")
 	diffLayerDesc, diffID, err := createDiff(ctx, id, sn, client.ContentStore(), differ)
 	if err != nil {
 		return emptyDigest, fmt.Errorf("failed to export layer: %w", err)
 	}
+	track.End()
 
+	track.Begin("Commit: generate commit image config")
 	imageConfig, err := generateCommitImageConfig(ctx, container, baseImg, diffID, opts)
 	if err != nil {
 		return emptyDigest, fmt.Errorf("failed to generate commit image config: %w", err)
 	}
+	track.End()
 
 	rootfsID := identity.ChainID(imageConfig.RootFS.DiffIDs).String()
+	track.Begin("Commit: apply diff layer")
 	if err := applyDiffLayer(ctx, rootfsID, baseImgConfig, sn, differ, diffLayerDesc); err != nil {
 		return emptyDigest, fmt.Errorf("failed to apply diff: %w", err)
 	}
+	track.End()
 
+	track.Begin("Commit: write contents for image")
 	commitManifestDesc, configDigest, err := writeContentsForImage(ctx, snName, baseImg, imageConfig, diffLayerDesc)
 	if err != nil {
 		return emptyDigest, err
 	}
+	track.End()
 
 	// image create
 	img := images.Image{
@@ -200,6 +227,7 @@ func Commit(ctx context.Context, client *containerd.Client, container containerd
 		CreatedAt: time.Now(),
 	}
 
+	track.Begin("Commit: create/update image")
 	if _, err := client.ImageService().Update(ctx, img); err != nil {
 		if !errdefs.IsNotFound(err) {
 			return emptyDigest, err
@@ -209,12 +237,15 @@ func Commit(ctx context.Context, client *containerd.Client, container containerd
 			return emptyDigest, fmt.Errorf("failed to create new image %s: %w", opts.Ref, err)
 		}
 	}
+	track.End()
 
+	track.Begin("Commit: unpack the image to snapshotter")
 	// unpack the image to snapshotter
 	cimg := containerd.NewImage(client, img)
 	if err := cimg.Unpack(ctx, snName); err != nil {
 		return emptyDigest, err
 	}
+	track.End()
 
 	return configDigest, nil
 }

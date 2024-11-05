@@ -37,15 +37,19 @@ import (
 	"github.com/containerd/platforms"
 
 	"github.com/containerd/nerdctl/v2/pkg/imgutil/jobs"
+	"github.com/containerd/nerdctl/v2/pkg/imgutil/tracklogs"
 )
 
 // Push pushes an image to a remote registry.
 func Push(ctx context.Context, client *containerd.Client, resolver remotes.Resolver, pushTracker docker.StatusTracker, stdout io.Writer,
 	localRef, remoteRef string, platform platforms.MatchComparer, allowNonDist, quiet bool) error {
+	track, err := tracklogs.New()
+	track.Begin("Push: get image info")
 	img, err := client.ImageService().Get(ctx, localRef)
 	if err != nil {
 		return fmt.Errorf("unable to resolve image to manifest: %w", err)
 	}
+	track.End()
 	desc := img.Target
 
 	ongoing := newPushJobs(pushTracker)
